@@ -114,16 +114,26 @@ if user_question:
         [doc.page_content for doc in docs]
     )
 
-    prompt = f"""
-    Answer the question using the context below.
+    prompt =f"""
+You are a helpful AI assistant.
 
-    Context:
-    {context}
+Answer the user's question using the provided context.
 
-    Question:
-    {user_question}
-    """
+Rules:
+1. Give clear and short summarized answers
+2. Do not copy exact text from context
+3. Explain in simple human-friendly language
+4. If needed, combine PDF + Website information
+5. Answer like a chatbot, not like pasted notes
 
+Context:
+{context}
+
+Question:
+{user_question}
+
+Helpful Answer:
+"""
     # LLM Response
     response = llm.invoke(prompt)
     answer = response.content
