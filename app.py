@@ -102,8 +102,13 @@ if user_question:
     with st.chat_message("user"):
         st.markdown(user_question)
 
-    # Retrieve relevant documents
-    docs = retriever.get_relevant_documents(user_question)
+    # -----------------------------------
+    # IMPORTANT FIX:
+    # Use retriever.invoke()
+    # instead of get_relevant_documents()
+    # for newer LangChain versions
+    # -----------------------------------
+    docs = retriever.invoke(user_question)
 
     context = "\n\n".join(
         [doc.page_content for doc in docs]
@@ -119,7 +124,7 @@ if user_question:
     {user_question}
     """
 
-    # LLM response
+    # LLM Response
     response = llm.invoke(prompt)
     answer = response.content
 
