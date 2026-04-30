@@ -1,6 +1,5 @@
 import os
 import streamlit as st
-from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -8,118 +7,126 @@ from langchain_community.document_loaders import PyPDFLoader, WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 
-# -----------------------------
-# LOAD ENV
-# -----------------------------
-load_dotenv()
+# -----------------------------------
+# PAGE CONFIG
+# -----------------------------------
+st.set_page_config(
+    page_title="Multi-Source RAG Chatbot",
+    page_icon="🤖"
+)
 
+st.title("🤖 Multi-Source RAG Chatbot")
+st.write("Ask questions from PDF + Website content")
+
+# -----------------------------------
+# API KEY
+# -----------------------------------
 api_key = os.getenv("GOOGLE_API_KEY")
 
 if not api_key:
-    raise ValueError("API key not loaded. Check .env file")
+    st.error("GOOGLE_API_KEY not found. Add it in Hugging Face Secrets.")
+    st.stop()
 
-os.environ["GOOGLE_API_KEY"] = api_key
-
-# -----------------------------
+# -----------------------------------
 # LLM
-# -----------------------------
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+# -----------------------------------
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    google_api_key=api_key
+)
 
-# -----------------------------
+# -----------------------------------
 # EMBEDDINGS
-# -----------------------------
+# -----------------------------------
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
-# -----------------------------
-# LOAD DATA
-# -----------------------------
-pdf_docs = PyPDFLoader("raag.pdf").load()
+# -----------------------------------
+# CACHE VECTOR DATABASE
+# -----------------------------------
+@st.cache_resource
+def load_vector_db():
+    # Load PDF
+    pdf_docs = PyPDFLoader("raag.pdf").load()
 
-web_docs = WebBaseLoader(
-    "https://www.ibm.com/think/topics/deep-learning"
-).load()
+    # Load Website
+    web_docs = WebBaseLoader(
+        "https://www.ibm.com/think/topics/deep-learning"
+    ).load()
 
-# -----------------------------
-# CHUNKING (IMPROVED)
-# -----------------------------
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1200,
-    chunk_overlap=200
+    # Text Splitter
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1200,
+        chunk_overlap=200
+    )
+
+    pdf_chunks = splitter.split_documents(pdf_docs)
+    web_chunks = splitter.split_documents(web_docs)
+
+    all_chunks = pdf_chunks + web_chunks
+
+    # Create Vector DB
+    db = FAISS.from_documents(all_chunks, embeddings)
+
+    return db
+
+db = load_vector_db()
+
+retriever = db.as_retriever(
+    search_kwargs={"k": 5}
 )
 
-pdf_chunks = splitter.split_documents(pdf_docs)
-web_chunks = splitter.split_documents(web_docs)
+# -----------------------------------
+# CHAT HISTORY
+# -----------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# -----------------------------
-# VECTOR DB
-# -----------------------------
-pdf_db = FAISS.from_documents(pdf_chunks, embeddings)
-web_db = FAISS.from_documents(web_chunks, embeddings)
+# Show previous messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-pdf_retriever = pdf_db.as_retriever(search_kwargs={"k": 5})
-web_retriever = web_db.as_retriever(search_kwargs={"k": 5})
+# -----------------------------------
+# CHAT INPUT
+# -----------------------------------
+user_question = st.chat_input("Ask your question here...")
 
-# -----------------------------
-# ROUTER + FIX DL CASE
-# -----------------------------
-def route_query(query):
-    query_lower = query.lower()
+if user_question:
+    # Save and show user message
+    st.session_state.messages.append(
+        {"role": "user", "content": user_question}
+    )
 
-    if query_lower == "dl":
-        query = "deep learning"
+    with st.chat_message("user"):
+        st.markdown(user_question)
 
-    return query
+    # Retrieve relevant documents
+    docs = retriever.get_relevant_documents(user_question)
 
-# -----------------------------
-# GET DOCS (HYBRID SEARCH)
-# -----------------------------
-def get_docs(query):
-    pdf_docs = pdf_retriever.invoke(query)
-    web_docs = web_retriever.invoke(query)
-    return pdf_docs + web_docs
-
-# -----------------------------
-# STREAMLIT UI
-# -----------------------------
-st.title("📚 Multi-Source RAG Chatbot (Improved)")
-
-query = st.text_input("Ask your question")
-
-if query:
-
-    processed_query = route_query(query)
-
-    docs = get_docs(processed_query)
-
-    if not docs:
-        st.write("No relevant context found. Try rephrasing.")
-        st.stop()
-
-    context = "\n\n".join([doc.page_content for doc in docs])
+    context = "\n\n".join(
+        [doc.page_content for doc in docs]
+    )
 
     prompt = f"""
-You are an expert AI tutor.
+    Answer the question using the context below.
 
-Rules:
-- Answer in 3–5 clear lines
-- Give explanation + simple understanding
-- Use ONLY context
-- If not in context, say: "I don't know from the provided data"
+    Context:
+    {context}
 
-Context:
-{context}
+    Question:
+    {user_question}
+    """
 
-Question:
-{query}
+    # LLM response
+    response = llm.invoke(prompt)
+    answer = response.content
 
-Answer:
-"""
+    # Save and show assistant response
+    with st.chat_message("assistant"):
+        st.markdown(answer)
 
-    try:
-        response = llm.invoke(prompt)
-        st.write(response.content)
-
-    except Exception as e:
-        st.error(str(e))
+    st.session_state.messages.append(
+        {"role": "assistant", "content": answer}
+    )
